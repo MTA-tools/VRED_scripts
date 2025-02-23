@@ -13,12 +13,11 @@ def check_args():
         sys.exit(1)
 
 
-def rconnect(server, port):
+def create_udp_socket():
     while True:
         try:
-            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            s.connect((server, port))
-            print("[+] Socket connected")
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            print("[+] Socket created")
             return s
 
         except socket.error:
@@ -27,13 +26,13 @@ def rconnect(server, port):
             continue
 
 
-def rsend(s, buf):
-    s.send(buf)
+def rsend(s, buf, destination):
+    s.sendto(buf, destination)
     print("[+] Packet sent")
 
 
 def rrecv(s):
-    response = s.recv(1024)
+    response = s.recvfrom(1024)
     print(f"[+] Message received: {response}")
     return response
 
@@ -48,10 +47,10 @@ def main():
     size    = 1000
     buf     = b""
 
-    buf += b"\x41" * size
+    buf += b"\41" * size
 
-    s = rconnect(server, port)
-    rsend(s, buf)
+    s = create_udp_socket()
+    rsend(s, buf, (server, port))
     s.close()
 
 
