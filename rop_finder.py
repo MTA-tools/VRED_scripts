@@ -103,6 +103,8 @@ def simulate_gadget(gadget: str) -> Dict[str, str]:
             dest, src = parts[1].rstrip(","), parts[2].rstrip(",")
             if dest == src and dest in REGISTERS:
                 registers[dest] = "0"
+            elif dest in REGISTERS and src in REGISTERS:
+                registers[dest] = f"{dest}-{src}"
         elif op == "and" and len(parts) > 2:
             dest, src = parts[1].rstrip(","), parts[2].rstrip(",")
             if src == "0" and dest in REGISTERS:
@@ -160,7 +162,8 @@ def categorize_gadgets(gadgets: List[str]) -> Dict[str, List[str]]:
         "mem_read": lambda reg: rf'^0x[0-9a-fA-F]{{8}}:\s*mov\s+{reg}\s*,\s*(?:dword\s+)?\[[^]]+\]\s*;\s*ret',
         "mem_write": lambda reg: rf'^0x[0-9a-fA-F]{{8}}:\s*mov\s+(?:dword\s+)?\[[^]]+\],\s*{reg}\s*;\s*ret',
         "add_val": lambda reg: rf'^0x[0-9a-fA-F]{{8}}:\s*(add|adc)\s+{reg},\s*0x[0-9a-fA-F]+\s*;\s*ret',
-        "inc": lambda reg: rf'^0x[0-9a-fA-F]{{8}}:\s*(inc|dec)\s+{reg}.*ret',
+        "inc": lambda reg: rf'^0x[0-9a-fA-F]{{8}}:\s*(inc)\s+{reg}.*ret',
+        "dec": lambda reg: rf'^0x[0-9a-fA-F]{{8}}:\s*(dec)\s+{reg}.*ret',
     }
     
     simulation_conditions = {
@@ -168,6 +171,7 @@ def categorize_gadgets(gadgets: List[str]) -> Dict[str, List[str]]:
         "move": lambda reg1, reg2: lambda gadget, state: state[reg2] == reg1 and state[reg1] == reg1,
         "null": lambda reg: lambda gadget, state: state[reg] == "0",
         "add_reg": lambda reg1, reg2: lambda gadget, state: state[reg1] == f"{reg1}+{reg2}",
+        "sub_reg": lambda reg1, reg2: lambda gadget, state: state[reg1] == f"{reg1}-{reg2}",
         # "mem_read": lambda reg1, reg2: lambda gadget, state: state[reg1] == f"[{reg2}]",
     }
     
@@ -179,9 +183,11 @@ def categorize_gadgets(gadgets: List[str]) -> Dict[str, List[str]]:
         "mem_write": {},
         "add_val": {},
         "add_reg": {},
+        "sub_reg": {},
         "move": {},
         "mem_read": {},
-        "inc": {}
+        "inc": {},
+        "dec": {}
     }
     
     for reg in REGISTERS:
@@ -190,6 +196,7 @@ def categorize_gadgets(gadgets: List[str]) -> Dict[str, List[str]]:
         categories["mem_write"][reg] = filter_gadgets(gadgets, regex_patterns["mem_write"](reg))
         categories["add_val"][reg] = filter_gadgets(gadgets, regex_patterns["add_val"](reg))
         categories["inc"][reg] = filter_gadgets(gadgets, regex_patterns["inc"](reg))
+        categories["dec"][reg] = filter_gadgets(gadgets, regex_patterns["dec"](reg))
         categories["null"][reg] = query_gadgets(gadget_db, simulation_conditions["null"](reg))
         
         for reg2 in REGISTERS:
@@ -199,6 +206,9 @@ def categorize_gadgets(gadgets: List[str]) -> Dict[str, List[str]]:
                 )
                 categories["add_reg"].setdefault(f"{reg}+{reg2}", []).extend(
                     query_gadgets(gadget_db, simulation_conditions["add_reg"](reg, reg2))
+                )
+                categories["sub_reg"].setdefault(f"{reg}-{reg2}", []).extend(
+                    query_gadgets(gadget_db, simulation_conditions["sub_reg"](reg, reg2))
                 )
             # categories["mem_read"].setdefault(f"{reg} from {reg2}", []).extend(
             #     query_gadgets(gadget_db, simulation_conditions["mem_read"](reg, reg2))
@@ -223,25 +233,31 @@ def process_q1(filename: str, gadgets: List[str], image_base: str,
     pure_patterns = {
         "pop": lambda reg: re.compile(rf'0x[0-9a-fA-F]{{8}}:\s*pop\s+{reg}\s*;\s*ret'),
         "ropnops": re.compile(r'0x[0-9a-fA-F]{8}:\s*ret'),
-        "inc": lambda reg: re.compile(rf'0x[0-9a-fA-F]{{8}}:\s*(inc|dec)\s+{reg}\s*;\s*ret'),
+        "inc": lambda reg: re.compile(rf'0x[0-9a-fA-F]{{8}}:\s*(inc)\s+{reg}\s*;\s*ret'),
+        "dec": lambda reg: re.compile(rf'0x[0-9a-fA-F]{{8}}:\s*(dec)\s+{reg}\s*;\s*ret'),
         "null_xor": lambda reg: re.compile(rf'0x[0-9a-fA-F]{{8}}:\s*xor\s+{reg},\s*{reg}\s*;\s*ret'),
         "null_sub": lambda reg: re.compile(rf'0x[0-9a-fA-F]{{8}}:\s*sub\s+{reg},\s*{reg}\s*;\s*ret'),
         "null_and": lambda reg: re.compile(rf'0x[0-9a-fA-F]{{8}}:\s*and\s+{reg},\s*0\s*;\s*ret'),
         "add_reg": lambda reg1, reg2: re.compile(rf'0x[0-9a-fA-F]{{8}}:\s*(add|adc)\s+{reg1},\s*{reg2}\s*;\s*ret'),
-        "move_mov": lambda reg1, reg2: re.compile(rf'0x[0-9a-fA-F]{{8}}:\s*mov\s+{reg2},\s*{reg1}\s*;\s*ret'),
+        "sub_reg": lambda reg1, reg2: re.compile(rf'0x[0-9a-fA-F]{{8}}:\s*sub\s+{reg1},\s*{reg2}\s*;\s*ret'),
+        "move_mov": lambda reg1, reg2: re.compile(rf'0x[0-9a-fA-F]{{8}}:\s*mov\s+{reg2},\s*{reg1}\s*;\s*(pop\s+[a-zA-Z]{{3}}\s*;\s*)*ret'),
         "move_push_pop": lambda reg1, reg2: re.compile(rf'0x[0-9a-fA-F]{{8}}:\s*push\s+{reg1}\s*;\s*pop\s+{reg2}\s*;\s*ret'),
         "move_xchg": lambda reg1, reg2: re.compile(rf'0x[0-9a-fA-F]{{8}}:\s*xchg\s+{reg1},\s*{reg2}\s*;\s*ret'),
         "mem_write": lambda reg: re.compile(rf'0x[0-9a-fA-F]{{8}}:\s*mov\s+\[[^]]+\],\s*{reg}\s*;\s*ret'),
         "mem_read": lambda reg1, reg2: re.compile(rf'0x[0-9a-fA-F]{{8}}:\s*mov\s+{reg1},\s*dword\s+\[{reg2}\]\s*;\s*ret'),
     }
     
-    for category in ["pop", "stack_pivot", "ropnops", "null", "mem_read", "mem_write", "add_reg", "inc", "add_val", "move"]:
-        if category in ["pop", "null", "mem_write", "inc", "add_val", "add_reg", "mem_read"]:
-            if category in ["add_reg", "mem_read"]:
+    for category in ["pop", "stack_pivot", "ropnops", "null", "mem_read", "mem_write", "add_reg", "sub_reg", "inc", "dec", "add_val", "move"]:
+        if category in ["pop", "null", "mem_write", "inc", "dec","add_val", "add_reg", "sub_reg", "mem_read"]:
+            if category in ["add_reg", "sub_reg", "mem_read"]:
                 for key, add_gadgets in categories[category].items():
+                    pure_gadget = None
                     if category == "add_reg":
                         reg1, reg2 = key.split("+")
                         pure_gadget = next((g for g in add_gadgets if pure_patterns["add_reg"](reg1, reg2).match(g)), None)
+                    elif category == "sub_reg":
+                        reg1, reg2 = key.split("-")
+                        pure_gadget = next((g for g in add_gadgets if pure_patterns["sub_reg"](reg1, reg2).match(g)), None)
                     # else:  # mem_read
                     #     reg1, reg2 = key.split(" from ")
                     #     pure_gadget = next((g for g in add_gadgets if pure_patterns["mem_read"](reg1, reg2).match(g)), None)
