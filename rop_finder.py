@@ -85,9 +85,16 @@ def simulate_gadget(gadget: str) -> Dict[str, str]:
             arg = parts[1]
             registers[arg] = stack.pop() if stack else "stack_top"
         elif op == "mov" and len(parts) > 2:
-            dest, src = parts[1].rstrip(","), parts[2]
+            dest = parts[1].rstrip(",")
+            # Reconstruct source operand by joining parts after dest
+            src = " ".join(parts[2:])
             if src in REGISTERS:
                 registers[dest] = registers[src]
+            # elif "dword [" in src and "]" in src:  # e.g., "dword [eax]"
+            #     # Extract the register between brackets
+            #     src_reg = src.split("[")[1].split("]")[0]
+            #     if src_reg in REGISTERS:
+            #         registers[dest] = f"[{src_reg}]"  # Mark as memory read
         elif op == "xor" and len(parts) > 2:
             dest, src = parts[1].rstrip(","), parts[2].rstrip(",")
             if dest == src and dest in REGISTERS:
@@ -150,8 +157,10 @@ def categorize_gadgets(gadgets: List[str]) -> Dict[str, List[str]]:
     regex_patterns = {
         "pop": lambda reg: rf'^0x[0-9a-fA-F]{{8}}:\s*pop\s+{reg}\s*;\s*ret',
         "ropnops": r'^0x[0-9a-fA-F]{8}:\s*ret',
-        "mem_write": lambda reg: rf'^0x[0-9a-fA-F]{{8}}:\s*mov\s+\[[^]]+\],\s*{reg}\s*;\s*ret',
+        "mem_read": lambda reg: rf'^0x[0-9a-fA-F]{{8}}:\s*mov\s+{reg}\s*,\s*(?:dword\s+)?\[[^]]+\]\s*;\s*ret',
+        "mem_write": lambda reg: rf'^0x[0-9a-fA-F]{{8}}:\s*mov\s+(?:dword\s+)?\[[^]]+\],\s*{reg}\s*;\s*ret',
         "add_val": lambda reg: rf'^0x[0-9a-fA-F]{{8}}:\s*(add|adc)\s+{reg},\s*0x[0-9a-fA-F]+\s*;\s*ret',
+        "inc": lambda reg: rf'^0x[0-9a-fA-F]{{8}}:\s*(inc|dec)\s+{reg}.*ret',
     }
     
     simulation_conditions = {
@@ -159,6 +168,7 @@ def categorize_gadgets(gadgets: List[str]) -> Dict[str, List[str]]:
         "move": lambda reg1, reg2: lambda gadget, state: state[reg2] == reg1 and state[reg1] == reg1,
         "null": lambda reg: lambda gadget, state: state[reg] == "0",
         "add_reg": lambda reg1, reg2: lambda gadget, state: state[reg1] == f"{reg1}+{reg2}",
+        # "mem_read": lambda reg1, reg2: lambda gadget, state: state[reg1] == f"[{reg2}]",
     }
     
     categories = {
@@ -169,13 +179,17 @@ def categorize_gadgets(gadgets: List[str]) -> Dict[str, List[str]]:
         "mem_write": {},
         "add_val": {},
         "add_reg": {},
-        "move": {}
+        "move": {},
+        "mem_read": {},
+        "inc": {}
     }
     
     for reg in REGISTERS:
         categories["pop"][reg] = filter_gadgets(gadgets, regex_patterns["pop"](reg))
+        categories["mem_read"][reg] = filter_gadgets(gadgets, regex_patterns["mem_read"](reg))
         categories["mem_write"][reg] = filter_gadgets(gadgets, regex_patterns["mem_write"](reg))
         categories["add_val"][reg] = filter_gadgets(gadgets, regex_patterns["add_val"](reg))
+        categories["inc"][reg] = filter_gadgets(gadgets, regex_patterns["inc"](reg))
         categories["null"][reg] = query_gadgets(gadget_db, simulation_conditions["null"](reg))
         
         for reg2 in REGISTERS:
@@ -186,6 +200,9 @@ def categorize_gadgets(gadgets: List[str]) -> Dict[str, List[str]]:
                 categories["add_reg"].setdefault(f"{reg}+{reg2}", []).extend(
                     query_gadgets(gadget_db, simulation_conditions["add_reg"](reg, reg2))
                 )
+            # categories["mem_read"].setdefault(f"{reg} from {reg2}", []).extend(
+            #     query_gadgets(gadget_db, simulation_conditions["mem_read"](reg, reg2))
+            # )
     
     categories["ropnops"] = filter_gadgets(gadgets, regex_patterns["ropnops"])
     categories["stack_pivot"] = query_gadgets(gadget_db, simulation_conditions["stack_pivot"])
@@ -206,6 +223,7 @@ def process_q1(filename: str, gadgets: List[str], image_base: str,
     pure_patterns = {
         "pop": lambda reg: re.compile(rf'0x[0-9a-fA-F]{{8}}:\s*pop\s+{reg}\s*;\s*ret'),
         "ropnops": re.compile(r'0x[0-9a-fA-F]{8}:\s*ret'),
+        "inc": lambda reg: re.compile(rf'0x[0-9a-fA-F]{{8}}:\s*(inc|dec)\s+{reg}\s*;\s*ret'),
         "null_xor": lambda reg: re.compile(rf'0x[0-9a-fA-F]{{8}}:\s*xor\s+{reg},\s*{reg}\s*;\s*ret'),
         "null_sub": lambda reg: re.compile(rf'0x[0-9a-fA-F]{{8}}:\s*sub\s+{reg},\s*{reg}\s*;\s*ret'),
         "null_and": lambda reg: re.compile(rf'0x[0-9a-fA-F]{{8}}:\s*and\s+{reg},\s*0\s*;\s*ret'),
@@ -214,19 +232,24 @@ def process_q1(filename: str, gadgets: List[str], image_base: str,
         "move_push_pop": lambda reg1, reg2: re.compile(rf'0x[0-9a-fA-F]{{8}}:\s*push\s+{reg1}\s*;\s*pop\s+{reg2}\s*;\s*ret'),
         "move_xchg": lambda reg1, reg2: re.compile(rf'0x[0-9a-fA-F]{{8}}:\s*xchg\s+{reg1},\s*{reg2}\s*;\s*ret'),
         "mem_write": lambda reg: re.compile(rf'0x[0-9a-fA-F]{{8}}:\s*mov\s+\[[^]]+\],\s*{reg}\s*;\s*ret'),
+        "mem_read": lambda reg1, reg2: re.compile(rf'0x[0-9a-fA-F]{{8}}:\s*mov\s+{reg1},\s*dword\s+\[{reg2}\]\s*;\s*ret'),
     }
     
-    for category in ["pop", "stack_pivot", "ropnops", "null", "mem_write", "add_val", "add_reg", "move"]:
-        if category in ["pop", "null", "mem_write", "add_val", "add_reg"]:
-            if category == "add_reg":
-                for add_key, add_gadgets in categories[category].items():
-                    reg1, reg2 = add_key.split("+")
-                    pure_gadget = next((g for g in add_gadgets if pure_patterns["add_reg"](reg1, reg2).match(g)), None)
+    for category in ["pop", "stack_pivot", "ropnops", "null", "mem_read", "mem_write", "add_reg", "inc", "add_val", "move"]:
+        if category in ["pop", "null", "mem_write", "inc", "add_val", "add_reg", "mem_read"]:
+            if category in ["add_reg", "mem_read"]:
+                for key, add_gadgets in categories[category].items():
+                    if category == "add_reg":
+                        reg1, reg2 = key.split("+")
+                        pure_gadget = next((g for g in add_gadgets if pure_patterns["add_reg"](reg1, reg2).match(g)), None)
+                    # else:  # mem_read
+                    #     reg1, reg2 = key.split(" from ")
+                    #     pure_gadget = next((g for g in add_gadgets if pure_patterns["mem_read"](reg1, reg2).match(g)), None)
                     if pure_gadget:
                         gadgets_to_write = [pure_gadget]
                     else:
                         gadgets_to_write = add_gadgets[:max_gadgets]
-                    write_gadgets(filename, gadgets_to_write, f"{category} {add_key}", image_base, aslr, dll_name)
+                    write_gadgets(filename, gadgets_to_write, f"{category} {key}", image_base, aslr, dll_name)
                     remaining = [g for g in remaining if g not in gadgets_to_write]
             elif category == "null":
                 for reg in REGISTERS:
@@ -242,7 +265,7 @@ def process_q1(filename: str, gadgets: List[str], image_base: str,
                         gadgets_to_write = gadget_list[:max_gadgets]
                     write_gadgets(filename, gadgets_to_write, f"{category} {reg}", image_base, aslr, dll_name)
                     remaining = [g for g in remaining if g not in gadgets_to_write]
-            else:  # pop, mem_write, add_val
+            else:  # pop, mem_read, mem_write, add_val
                 for reg in REGISTERS:
                     gadget_list = categories[category][reg]
                     if category in pure_patterns:
@@ -252,7 +275,7 @@ def process_q1(filename: str, gadgets: List[str], image_base: str,
                         else:
                             gadgets_to_write = gadget_list[:max_gadgets]
                     else:
-                        gadgets_to_write = gadget_list[:max_gadgets] 
+                        gadgets_to_write = gadget_list[:max_gadgets]
                     write_gadgets(filename, gadgets_to_write, f"{category} {reg}", image_base, aslr, dll_name)
                     remaining = [g for g in remaining if g not in gadgets_to_write]
         elif category == "move":
@@ -278,7 +301,7 @@ def process_q1(filename: str, gadgets: List[str], image_base: str,
                 else:
                     gadgets_to_write = gadget_list[:max_gadgets]
             else:  # stack_pivot
-                gadgets_to_write = gadget_list[:max_gadgets]  # No pure preference for stack_pivot
+                gadgets_to_write = gadget_list[:max_gadgets]
             write_gadgets(filename, gadgets_to_write, category, image_base, aslr, dll_name)
             remaining = [g for g in remaining if g not in gadgets_to_write]
     
