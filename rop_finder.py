@@ -90,11 +90,6 @@ def simulate_gadget(gadget: str) -> Dict[str, str]:
             src = " ".join(parts[2:])
             if src in REGISTERS:
                 registers[dest] = registers[src]
-            # elif "dword [" in src and "]" in src:  # e.g., "dword [eax]"
-            #     # Extract the register between brackets
-            #     src_reg = src.split("[")[1].split("]")[0]
-            #     if src_reg in REGISTERS:
-            #         registers[dest] = f"[{src_reg}]"  # Mark as memory read
         elif op == "xor" and len(parts) > 2:
             dest, src = parts[1].rstrip(","), parts[2].rstrip(",")
             if dest == src and dest in REGISTERS:
@@ -167,12 +162,11 @@ def categorize_gadgets(gadgets: List[str]) -> Dict[str, List[str]]:
     }
     
     simulation_conditions = {
-        "stack_pivot": lambda gadget, state: state["esp"] == "stack_top" or any(state["esp"] == r for r in REGISTERS if r != "esp"),
-        "move": lambda reg1, reg2: lambda gadget, state: state[reg2] == reg1 and state[reg1] == reg1,
-        "null": lambda reg: lambda gadget, state: state[reg] == "0",
-        "add_reg": lambda reg1, reg2: lambda gadget, state: state[reg1] == f"{reg1}+{reg2}",
-        "sub_reg": lambda reg1, reg2: lambda gadget, state: state[reg1] == f"{reg1}-{reg2}",
-        # "mem_read": lambda reg1, reg2: lambda gadget, state: state[reg1] == f"[{reg2}]",
+        "stack_pivot": lambda _, state: state["esp"] == "stack_top" or any(state["esp"] == r for r in REGISTERS if r != "esp"),
+        "move": lambda reg1, reg2: lambda _, state: state[reg2] == reg1 and state[reg1] == reg1,
+        "null": lambda reg: lambda _, state: state[reg] == "0",
+        "add_reg": lambda reg1, reg2: lambda _, state: state[reg1] == f"{reg1}+{reg2}",
+        "sub_reg": lambda reg1, reg2: lambda _, state: state[reg1] == f"{reg1}-{reg2}",
     }
     
     categories = {
@@ -210,24 +204,18 @@ def categorize_gadgets(gadgets: List[str]) -> Dict[str, List[str]]:
                 categories["sub_reg"].setdefault(f"{reg}-{reg2}", []).extend(
                     query_gadgets(gadget_db, simulation_conditions["sub_reg"](reg, reg2))
                 )
-            # categories["mem_read"].setdefault(f"{reg} from {reg2}", []).extend(
-            #     query_gadgets(gadget_db, simulation_conditions["mem_read"](reg, reg2))
-            # )
     
-    categories["ropnops"] = filter_gadgets(gadgets, regex_patterns["ropnops"])
-    categories["stack_pivot"] = query_gadgets(gadget_db, simulation_conditions["stack_pivot"])
+    categories["ropnops"]       = filter_gadgets(gadgets, regex_patterns["ropnops"])
+    categories["stack_pivot"]   = query_gadgets(gadget_db, simulation_conditions["stack_pivot"])
     
     return categories
 
-def process_q1(filename: str, gadgets: List[str], image_base: str, 
+def process_high(filename: str, gadgets: List[str], image_base: str, 
                aslr: Optional[int], dll_name: Optional[str], max_gadgets: int) -> List[str]:
     """Process and categorize high-quality gadgets, writing them to a file with pure gadget preference."""
     categories = categorize_gadgets(gadgets)
     
     remaining = gadgets.copy()
-    
-    with open(filename, "a") as f:
-        f.write("======================CRITICAL OSED GADGETS======================\n")
     
     # Regex patterns for pure gadgets
     pure_patterns = {
@@ -243,84 +231,110 @@ def process_q1(filename: str, gadgets: List[str], image_base: str,
         "move_mov": lambda reg1, reg2: re.compile(rf'0x[0-9a-fA-F]{{8}}:\s*mov\s+{reg2},\s*{reg1}\s*;\s*(pop\s+[a-zA-Z]{{3}}\s*;\s*)*ret'),
         "move_push_pop": lambda reg1, reg2: re.compile(rf'0x[0-9a-fA-F]{{8}}:\s*push\s+{reg1}\s*;\s*pop\s+{reg2}\s*;\s*ret'),
         "move_xchg": lambda reg1, reg2: re.compile(rf'0x[0-9a-fA-F]{{8}}:\s*xchg\s+{reg1},\s*{reg2}\s*;\s*ret'),
-        "mem_write": lambda reg: re.compile(rf'0x[0-9a-fA-F]{{8}}:\s*mov\s+\[[^]]+\],\s*{reg}\s*;\s*ret'),
-        "mem_read": lambda reg1, reg2: re.compile(rf'0x[0-9a-fA-F]{{8}}:\s*mov\s+{reg1},\s*dword\s+\[{reg2}\]\s*;\s*ret'),
+        "mem_write": lambda reg: re.compile(rf'0x[0-9a-fA-F]{{8}}:\s*mov\s+(dword\s+)?\[[^]]+\],\s*{reg}\s*;\s*ret'),
+        "mem_read": lambda reg: re.compile(rf'0x[0-9a-fA-F]{{8}}:\s*mov\s+{reg},\s*(dword\s+)?\[[^]]+\]\s*;\s*ret'),
     }
     
-    for category in ["pop", "stack_pivot", "ropnops", "null", "mem_read", "mem_write", "add_reg", "sub_reg", "inc", "dec", "add_val", "move"]:
-        if category in ["pop", "null", "mem_write", "inc", "dec","add_val", "add_reg", "sub_reg", "mem_read"]:
-            if category in ["add_reg", "sub_reg", "mem_read"]:
-                for key, add_gadgets in categories[category].items():
-                    pure_gadget = None
-                    if category == "add_reg":
-                        reg1, reg2 = key.split("+")
-                        pure_gadget = next((g for g in add_gadgets if pure_patterns["add_reg"](reg1, reg2).match(g)), None)
-                    elif category == "sub_reg":
-                        reg1, reg2 = key.split("-")
-                        pure_gadget = next((g for g in add_gadgets if pure_patterns["sub_reg"](reg1, reg2).match(g)), None)
-                    # else:  # mem_read
-                    #     reg1, reg2 = key.split(" from ")
-                    #     pure_gadget = next((g for g in add_gadgets if pure_patterns["mem_read"](reg1, reg2).match(g)), None)
-                    if pure_gadget:
-                        gadgets_to_write = [pure_gadget]
-                    else:
-                        gadgets_to_write = add_gadgets[:max_gadgets]
-                    write_gadgets(filename, gadgets_to_write, f"{category} {key}", image_base, aslr, dll_name)
-                    remaining = [g for g in remaining if g not in gadgets_to_write]
-            elif category == "null":
-                for reg in REGISTERS:
-                    gadget_list = categories[category][reg]
-                    pure_gadgets = []
-                    for pattern_key in ["null_xor", "null_sub", "null_and"]:
-                        pure_gadget = next((g for g in gadget_list if pure_patterns[pattern_key](reg).match(g)), None)
-                        if pure_gadget:
-                            pure_gadgets.append(pure_gadget)
-                    if pure_gadgets:
-                        gadgets_to_write = pure_gadgets
-                    else:
-                        gadgets_to_write = gadget_list[:max_gadgets]
-                    write_gadgets(filename, gadgets_to_write, f"{category} {reg}", image_base, aslr, dll_name)
-                    remaining = [g for g in remaining if g not in gadgets_to_write]
-            else:  # pop, mem_read, mem_write, add_val
-                for reg in REGISTERS:
-                    gadget_list = categories[category][reg]
-                    if category in pure_patterns:
-                        pure_gadget = next((g for g in gadget_list if pure_patterns[category](reg).match(g)), None)
-                        if pure_gadget:
-                            gadgets_to_write = [pure_gadget]
-                        else:
-                            gadgets_to_write = gadget_list[:max_gadgets]
-                    else:
-                        gadgets_to_write = gadget_list[:max_gadgets]
-                    write_gadgets(filename, gadgets_to_write, f"{category} {reg}", image_base, aslr, dll_name)
-                    remaining = [g for g in remaining if g not in gadgets_to_write]
-        elif category == "move":
-            for move_key, move_gadgets in categories[category].items():
-                reg1, reg2 = move_key.split(" to ")
-                pure_gadgets = []
-                for pattern_key in ["move_mov", "move_push_pop", "move_xchg"]:
-                    pure_gadget = next((g for g in move_gadgets if pure_patterns[pattern_key](reg1, reg2).match(g)), None)
-                    if pure_gadget:
-                        pure_gadgets.append(pure_gadget)
-                if pure_gadgets:
-                    gadgets_to_write = pure_gadgets
-                else:
-                    gadgets_to_write = move_gadgets[:max_gadgets]
-                write_gadgets(filename, gadgets_to_write, f"{category} {move_key}", image_base, aslr, dll_name)
-                remaining = [g for g in remaining if g not in gadgets_to_write]
-        else:  # stack_pivot, ropnops
-            gadget_list = categories[category]
-            if category == "ropnops":
-                pure_gadget = next((g for g in gadget_list if pure_patterns[category].match(g)), None)
-                if pure_gadget:
-                    gadgets_to_write = [pure_gadget]
-                else:
-                    gadgets_to_write = gadget_list[:max_gadgets]
-            else:  # stack_pivot
-                gadgets_to_write = gadget_list[:max_gadgets]
-            write_gadgets(filename, gadgets_to_write, category, image_base, aslr, dll_name)
+    if "pop" in categories:
+        for reg in REGISTERS:
+            gadget_list = categories["pop"][reg]
+            pure_gadget = next((g for g in gadget_list if pure_patterns["pop"](reg).match(g)), None)
+            gadgets_to_write = [pure_gadget] if pure_gadget else gadget_list[:max_gadgets]
+            write_gadgets(filename, gadgets_to_write, f"pop {reg}", image_base, aslr, dll_name)
             remaining = [g for g in remaining if g not in gadgets_to_write]
-    
+
+    if "stack_pivot" in categories:
+        gadget_list = categories["stack_pivot"]
+        gadgets_to_write = gadget_list[:max_gadgets]  # No pure preference for stack_pivot
+        write_gadgets(filename, gadgets_to_write, "stack_pivot", image_base, aslr, dll_name)
+        remaining = [g for g in remaining if g not in gadgets_to_write]
+
+    if "ropnops" in categories:
+        gadget_list = categories["ropnops"]
+        pure_gadget = next((g for g in gadget_list if pure_patterns["ropnops"].match(g)), None)
+        gadgets_to_write = [pure_gadget] if pure_gadget else gadget_list[:max_gadgets]
+        write_gadgets(filename, gadgets_to_write, "ropnops", image_base, aslr, dll_name)
+        remaining = [g for g in remaining if g not in gadgets_to_write]
+
+    if "null" in categories:
+        for reg in REGISTERS:
+            gadget_list = categories["null"][reg]
+            pure_gadgets = []
+            for pattern_key in ["null_xor", "null_sub", "null_and"]:
+                pure_gadget = next((g for g in gadget_list if pure_patterns[pattern_key](reg).match(g)), None)
+                if pure_gadget:
+                    pure_gadgets.append(pure_gadget)
+            gadgets_to_write = pure_gadgets if pure_gadgets else gadget_list[:max_gadgets]
+            write_gadgets(filename, gadgets_to_write, f"null {reg}", image_base, aslr, dll_name)
+            remaining = [g for g in remaining if g not in gadgets_to_write]
+
+    if "mem_read" in categories:
+        for reg in REGISTERS:
+            gadget_list = categories["mem_read"][reg]
+            pure_gadget = next((g for g in gadget_list if pure_patterns["mem_read"](reg).match(g)), None)
+            gadgets_to_write = [pure_gadget] if pure_gadget else gadget_list[:max_gadgets]
+            write_gadgets(filename, gadgets_to_write, f"mem_read {reg}", image_base, aslr, dll_name)
+            remaining = [g for g in remaining if g not in gadgets_to_write]
+
+    if "mem_write" in categories:
+        for reg in REGISTERS:
+            gadget_list = categories["mem_write"][reg]
+            pure_gadget = next((g for g in gadget_list if pure_patterns["mem_write"](reg).match(g)), None)
+            gadgets_to_write = [pure_gadget] if pure_gadget else gadget_list[:max_gadgets]
+            write_gadgets(filename, gadgets_to_write, f"mem_write {reg}", image_base, aslr, dll_name)
+            remaining = [g for g in remaining if g not in gadgets_to_write]
+
+    if "add_val" in categories:
+        for reg in REGISTERS:
+            gadget_list = categories["add_val"][reg]
+            gadgets_to_write = gadget_list[:max_gadgets]  # No pure pattern defined
+            write_gadgets(filename, gadgets_to_write, f"add_val {reg}", image_base, aslr, dll_name)
+            remaining = [g for g in remaining if g not in gadgets_to_write]
+
+    if "add_reg" in categories:
+        for key, add_gadgets in categories["add_reg"].items():
+            reg1, reg2 = key.split("+")
+            pure_gadget = next((g for g in add_gadgets if pure_patterns["add_reg"](reg1, reg2).match(g)), None)
+            gadgets_to_write = [pure_gadget] if pure_gadget else add_gadgets[:max_gadgets]
+            write_gadgets(filename, gadgets_to_write, f"add_reg {key}", image_base, aslr, dll_name)
+            remaining = [g for g in remaining if g not in gadgets_to_write]
+
+    if "sub_reg" in categories:
+        for key, sub_gadgets in categories["sub_reg"].items():
+            reg1, reg2 = key.split("-")
+            pure_gadget = next((g for g in sub_gadgets if pure_patterns["sub_reg"](reg1, reg2).match(g)), None)
+            gadgets_to_write = [pure_gadget] if pure_gadget else sub_gadgets[:max_gadgets]
+            write_gadgets(filename, gadgets_to_write, f"sub_reg {key}", image_base, aslr, dll_name)
+            remaining = [g for g in remaining if g not in gadgets_to_write]
+
+    if "inc" in categories:
+        for reg in REGISTERS:
+            gadget_list = categories["inc"][reg]
+            pure_gadget = next((g for g in gadget_list if pure_patterns["inc"](reg).match(g)), None)
+            gadgets_to_write = [pure_gadget] if pure_gadget else gadget_list[:max_gadgets]
+            write_gadgets(filename, gadgets_to_write, f"inc {reg}", image_base, aslr, dll_name)
+            remaining = [g for g in remaining if g not in gadgets_to_write]
+
+    if "dec" in categories:
+        for reg in REGISTERS:
+            gadget_list = categories["dec"][reg]
+            pure_gadget = next((g for g in gadget_list if pure_patterns["dec"](reg).match(g)), None)
+            gadgets_to_write = [pure_gadget] if pure_gadget else gadget_list[:max_gadgets]
+            write_gadgets(filename, gadgets_to_write, f"dec {reg}", image_base, aslr, dll_name)
+            remaining = [g for g in remaining if g not in gadgets_to_write]
+
+    if "move" in categories:
+        for move_key, move_gadgets in categories["move"].items():
+            reg1, reg2 = move_key.split(" to ")
+            pure_gadgets = []
+            for pattern_key in ["move_mov", "move_push_pop", "move_xchg"]:
+                pure_gadget = next((g for g in move_gadgets if pure_patterns[pattern_key](reg1, reg2).match(g)), None)
+                if pure_gadget:
+                    pure_gadgets.append(pure_gadget)
+            gadgets_to_write = pure_gadgets if pure_gadgets else move_gadgets[:max_gadgets]
+            write_gadgets(filename, gadgets_to_write, f"move {move_key}", image_base, aslr, dll_name)
+            remaining = [g for g in remaining if g not in gadgets_to_write]
+
     return remaining
 
 def main():
@@ -340,7 +354,7 @@ def main():
     subprocess.run(["dos2unix", args.rop_output], stdout=subprocess.PIPE)
 
     base = args.rop_output.rstrip(".txt")
-    files = {"full": f"{base}-full.txt", "q1": f"{base}-high.txt"}
+    files = {"full": f"{base}-full.txt", "high": f"{base}-high.txt"}
     for f in files.values():
         open(f, "w").close()
 
@@ -357,8 +371,8 @@ def main():
     write_gadgets(files["full"], gadgets, "filtered gadgets", args.image_base, args.aslr, args.dll_name)
     print(f"[+] {len(gadgets)} gadgets written to {files['full']}")
 
-    gadgets = process_q1(files["q1"], gadgets, args.image_base, args.aslr, args.dll_name, args.max_gadgets)
-    print(f"[+] {len(gadgets)} high-quality gadgets written to {files['q1']}")
+    gadgets = process_high(files["high"], gadgets, args.image_base, args.aslr, args.dll_name, args.max_gadgets)
+    print(f"[+] {len(gadgets)} high-quality gadgets written to {files['high']}")
 
 if __name__ == "__main__":
     main()
