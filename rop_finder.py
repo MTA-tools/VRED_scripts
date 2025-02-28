@@ -8,12 +8,14 @@ from typing import List, Dict, Optional
 # Registers for gadget hunting
 REGISTERS = ["eax", "ebx", "ecx", "edx", "esi", "edi", "ebp", "esp"]
 
+
 def read_gadgets(file: str) -> List[str]:
     """Read gadgets from rp++ output, skipping header lines."""
     with open(file, "r") as f:
         lines = f.readlines()
         start = next((i for i, line in enumerate(lines) if "A total of " in line), 0) + 1
         return [line.strip() for line in lines[start:]]
+
 
 def filter_badchars(gadgets: List[str], badchars: str, aslr: Optional[int] = None) -> List[str]:
     """Filter gadgets containing bad bytes in their addresses."""
@@ -25,12 +27,14 @@ def filter_badchars(gadgets: List[str], badchars: str, aslr: Optional[int] = Non
                   for i in range(0, len(gadget.split(":")[0][2 + start:]), 2))
     ]
 
+
 def filter_large_retns(gadgets: List[str]) -> List[str]:
     """Remove gadgets with retn offsets > 255 using a simple string check."""
     return [
         gadget for gadget in gadgets
         if "retn" not in gadget or int(gadget.split("retn ")[1].split()[0], 16) <= 255
     ]
+
 
 def filter_calls_jumps(gadgets: List[str]) -> List[str]:
     """Filter out gadgets containing call or jump instructions."""
@@ -43,6 +47,7 @@ def filter_calls_jumps(gadgets: List[str]) -> List[str]:
         gadget for gadget in gadgets
         if not any(op in gadget.split(":", 1)[1].lower() for op in call_jump_ops)
     ]
+
 
 def write_gadgets(filename: str, gadgets: List[str], header: str, 
                   image_base: str, aslr: Optional[int] = None, dll_name: Optional[str] = None) -> None:
@@ -61,10 +66,12 @@ def write_gadgets(filename: str, gadgets: List[str], header: str,
                 f.write(f"{gadget}\n")
         f.write("\n")
 
+
 def parse_gadget(gadget: str) -> List[str]:
     """Split a gadget into individual instructions."""
     instruction_part = gadget.split(":", 1)[1].split(" ;  (1 found)")[0].strip()
     return [instr.strip() for instr in instruction_part.split(";") if instr.strip()]
+
 
 def simulate_gadget(gadget: str) -> Dict[str, str]:
     """Simulate stack/register changes and return final register states."""
@@ -115,12 +122,14 @@ def simulate_gadget(gadget: str) -> Dict[str, str]:
     
     return registers
 
+
 def build_gadget_db(gadgets: List[str]) -> Dict[str, Dict[str, str]]:
     """Build a dictionary of gadgets and their final register states."""
     gadget_db = {}
     for gadget in gadgets:
         gadget_db[gadget] = simulate_gadget(gadget)
     return gadget_db
+
 
 def filter_gadgets(gadgets: List[str], pattern: str) -> List[str]:
     """Filter gadgets matching a regex pattern, deduplicating by instruction sequence."""
@@ -135,6 +144,7 @@ def filter_gadgets(gadgets: List[str], pattern: str) -> List[str]:
                 matches.append(gadget)
     return sorted(matches, key=len)
 
+
 def query_gadgets(gadget_db: Dict[str, Dict[str, str]], condition) -> List[str]:
     """Return gadgets where the condition on final state is true, deduplicating by instruction sequence."""
     matches = []
@@ -146,6 +156,7 @@ def query_gadgets(gadget_db: Dict[str, Dict[str, str]], condition) -> List[str]:
                 seen_instructions.add(instr)
                 matches.append(gadget)
     return sorted(matches, key=len)
+
 
 def categorize_gadgets(gadgets: List[str]) -> Dict[str, List[str]]:
     """Categorize gadgets using a mix of regex and simulation."""
@@ -210,6 +221,7 @@ def categorize_gadgets(gadgets: List[str]) -> Dict[str, List[str]]:
     
     return categories
 
+
 def process_high(filename: str, gadgets: List[str], image_base: str, 
                aslr: Optional[int], dll_name: Optional[str], max_gadgets: int) -> List[str]:
     """Process and categorize high-quality gadgets, writing them to a file with pure gadget preference."""
@@ -237,29 +249,29 @@ def process_high(filename: str, gadgets: List[str], image_base: str,
     
     if "pop" in categories:
         for reg in REGISTERS:
-            gadget_list = categories["pop"][reg]
-            pure_gadget = next((g for g in gadget_list if pure_patterns["pop"](reg).match(g)), None)
-            gadgets_to_write = [pure_gadget] if pure_gadget else gadget_list[:max_gadgets]
+            gadget_list         = categories["pop"][reg]
+            pure_gadget         = next((g for g in gadget_list if pure_patterns["pop"](reg).match(g)), None)
+            gadgets_to_write    = [pure_gadget] if pure_gadget else gadget_list[:max_gadgets]
             write_gadgets(filename, gadgets_to_write, f"pop {reg}", image_base, aslr, dll_name)
             remaining = [g for g in remaining if g not in gadgets_to_write]
 
     if "stack_pivot" in categories:
-        gadget_list = categories["stack_pivot"]
-        gadgets_to_write = gadget_list[:max_gadgets]  # No pure preference for stack_pivot
+        gadget_list         = categories["stack_pivot"]
+        gadgets_to_write    = gadget_list[:max_gadgets]  # No pure preference for stack_pivot
         write_gadgets(filename, gadgets_to_write, "stack_pivot", image_base, aslr, dll_name)
         remaining = [g for g in remaining if g not in gadgets_to_write]
 
     if "ropnops" in categories:
-        gadget_list = categories["ropnops"]
-        pure_gadget = next((g for g in gadget_list if pure_patterns["ropnops"].match(g)), None)
-        gadgets_to_write = [pure_gadget] if pure_gadget else gadget_list[:max_gadgets]
+        gadget_list         = categories["ropnops"]
+        pure_gadget         = next((g for g in gadget_list if pure_patterns["ropnops"].match(g)), None)
+        gadgets_to_write    = [pure_gadget] if pure_gadget else gadget_list[:max_gadgets]
         write_gadgets(filename, gadgets_to_write, "ropnops", image_base, aslr, dll_name)
         remaining = [g for g in remaining if g not in gadgets_to_write]
 
     if "null" in categories:
         for reg in REGISTERS:
-            gadget_list = categories["null"][reg]
-            pure_gadgets = []
+            gadget_list     = categories["null"][reg]
+            pure_gadgets    = []
             for pattern_key in ["null_xor", "null_sub", "null_and"]:
                 pure_gadget = next((g for g in gadget_list if pure_patterns[pattern_key](reg).match(g)), None)
                 if pure_gadget:
@@ -270,63 +282,63 @@ def process_high(filename: str, gadgets: List[str], image_base: str,
 
     if "mem_read" in categories:
         for reg in REGISTERS:
-            gadget_list = categories["mem_read"][reg]
-            pure_gadget = next((g for g in gadget_list if pure_patterns["mem_read"](reg).match(g)), None)
-            gadgets_to_write = [pure_gadget] if pure_gadget else gadget_list[:max_gadgets]
+            gadget_list         = categories["mem_read"][reg]
+            pure_gadget         = next((g for g in gadget_list if pure_patterns["mem_read"](reg).match(g)), None)
+            gadgets_to_write    = [pure_gadget] if pure_gadget else gadget_list[:max_gadgets]
             write_gadgets(filename, gadgets_to_write, f"mem_read {reg}", image_base, aslr, dll_name)
             remaining = [g for g in remaining if g not in gadgets_to_write]
 
     if "mem_write" in categories:
         for reg in REGISTERS:
-            gadget_list = categories["mem_write"][reg]
-            pure_gadget = next((g for g in gadget_list if pure_patterns["mem_write"](reg).match(g)), None)
-            gadgets_to_write = [pure_gadget] if pure_gadget else gadget_list[:max_gadgets]
+            gadget_list         = categories["mem_write"][reg]
+            pure_gadget         = next((g for g in gadget_list if pure_patterns["mem_write"](reg).match(g)), None)
+            gadgets_to_write    = [pure_gadget] if pure_gadget else gadget_list[:max_gadgets]
             write_gadgets(filename, gadgets_to_write, f"mem_write {reg}", image_base, aslr, dll_name)
             remaining = [g for g in remaining if g not in gadgets_to_write]
 
     if "add_val" in categories:
         for reg in REGISTERS:
-            gadget_list = categories["add_val"][reg]
-            gadgets_to_write = gadget_list[:max_gadgets]  # No pure pattern defined
+            gadget_list         = categories["add_val"][reg]
+            gadgets_to_write    = gadget_list[:max_gadgets]  # No pure pattern defined
             write_gadgets(filename, gadgets_to_write, f"add_val {reg}", image_base, aslr, dll_name)
             remaining = [g for g in remaining if g not in gadgets_to_write]
 
     if "add_reg" in categories:
         for key, add_gadgets in categories["add_reg"].items():
-            reg1, reg2 = key.split("+")
-            pure_gadget = next((g for g in add_gadgets if pure_patterns["add_reg"](reg1, reg2).match(g)), None)
-            gadgets_to_write = [pure_gadget] if pure_gadget else add_gadgets[:max_gadgets]
+            reg1, reg2          = key.split("+")
+            pure_gadget         = next((g for g in add_gadgets if pure_patterns["add_reg"](reg1, reg2).match(g)), None)
+            gadgets_to_write    = [pure_gadget] if pure_gadget else add_gadgets[:max_gadgets]
             write_gadgets(filename, gadgets_to_write, f"add_reg {key}", image_base, aslr, dll_name)
             remaining = [g for g in remaining if g not in gadgets_to_write]
 
     if "sub_reg" in categories:
         for key, sub_gadgets in categories["sub_reg"].items():
-            reg1, reg2 = key.split("-")
-            pure_gadget = next((g for g in sub_gadgets if pure_patterns["sub_reg"](reg1, reg2).match(g)), None)
-            gadgets_to_write = [pure_gadget] if pure_gadget else sub_gadgets[:max_gadgets]
+            reg1, reg2          = key.split("-")
+            pure_gadget         = next((g for g in sub_gadgets if pure_patterns["sub_reg"](reg1, reg2).match(g)), None)
+            gadgets_to_write    = [pure_gadget] if pure_gadget else sub_gadgets[:max_gadgets]
             write_gadgets(filename, gadgets_to_write, f"sub_reg {key}", image_base, aslr, dll_name)
             remaining = [g for g in remaining if g not in gadgets_to_write]
 
     if "inc" in categories:
         for reg in REGISTERS:
-            gadget_list = categories["inc"][reg]
-            pure_gadget = next((g for g in gadget_list if pure_patterns["inc"](reg).match(g)), None)
-            gadgets_to_write = [pure_gadget] if pure_gadget else gadget_list[:max_gadgets]
+            gadget_list         = categories["inc"][reg]
+            pure_gadget         = next((g for g in gadget_list if pure_patterns["inc"](reg).match(g)), None)
+            gadgets_to_write    = [pure_gadget] if pure_gadget else gadget_list[:max_gadgets]
             write_gadgets(filename, gadgets_to_write, f"inc {reg}", image_base, aslr, dll_name)
             remaining = [g for g in remaining if g not in gadgets_to_write]
 
     if "dec" in categories:
         for reg in REGISTERS:
-            gadget_list = categories["dec"][reg]
-            pure_gadget = next((g for g in gadget_list if pure_patterns["dec"](reg).match(g)), None)
-            gadgets_to_write = [pure_gadget] if pure_gadget else gadget_list[:max_gadgets]
+            gadget_list         = categories["dec"][reg]
+            pure_gadget         = next((g for g in gadget_list if pure_patterns["dec"](reg).match(g)), None)
+            gadgets_to_write    = [pure_gadget] if pure_gadget else gadget_list[:max_gadgets]
             write_gadgets(filename, gadgets_to_write, f"dec {reg}", image_base, aslr, dll_name)
             remaining = [g for g in remaining if g not in gadgets_to_write]
 
     if "move" in categories:
         for move_key, move_gadgets in categories["move"].items():
-            reg1, reg2 = move_key.split(" to ")
-            pure_gadgets = []
+            reg1, reg2          = move_key.split(" to ")
+            pure_gadgets        = []
             for pattern_key in ["move_mov", "move_push_pop", "move_xchg"]:
                 pure_gadget = next((g for g in move_gadgets if pure_patterns[pattern_key](reg1, reg2).match(g)), None)
                 if pure_gadget:
@@ -337,10 +349,11 @@ def process_high(filename: str, gadgets: List[str], image_base: str,
 
     return remaining
 
+
 def main():
     """Main function to parse arguments and process gadgets."""
     parser = argparse.ArgumentParser(description="Filter rp++ output for gadgets")
-    parser.add_argument("rop_output", type=str, help="rp++ output file to ingest")
+    parser.add_argument("rop_outputs", type=str, nargs='+', help="One or more rp++ output files to ingest")
     parser.add_argument("-b", "--bad-bytes", type=str, help="Bad bytes formatted as \"\\x00\\x0a\" or \"000a\"")
     parser.add_argument("-d", "--dll-name", type=str, help="DLL name for output formatting")
     parser.add_argument("-a", "--aslr", type=int, help="Hex characters to disregard for ASLR")
@@ -351,28 +364,37 @@ def main():
     if args.aslr and not args.image_base:
         sys.exit("[-] --image-base required with --aslr")
 
-    subprocess.run(["dos2unix", args.rop_output], stdout=subprocess.PIPE)
-
     base = args.rop_output.rstrip(".txt")
     files = {"full": f"{base}-full.txt", "high": f"{base}-high.txt"}
     for f in files.values():
         open(f, "w").close()
 
-    gadgets = read_gadgets(args.rop_output)
+    gadgets = []
+    for rop_file in args.rop_outputs:
+        subprocess.run(["dos2unix", rop_file], stdout=subprocess.PIPE)
+        gadgets += read_gadgets(rop_file)
+        print(f"[+] Read gadgets from {rop_file}!")
+
     if args.bad_bytes:
-        original_count = len(gadgets)
-        gadgets = filter_badchars(gadgets, args.bad_bytes.replace("\\x", ""), args.aslr)
-        filtered_count = len(gadgets)
+        original_count  = len(gadgets)
+        gadgets         = filter_badchars(gadgets, args.bad_bytes.replace("\\x", ""), args.aslr)
+        print(f"[+] Filtered out gadgets whose addresses contain {args.bad_bytes}!")
+        filtered_count  = len(gadgets)
         if filtered_count < 0.1 * original_count:
             print(f"[!] Warning: {filtered_count}/{original_count} gadgets remain after filtering")
 
     gadgets = filter_large_retns(gadgets)
+    print(f"[+] Filtered out gadgets with large return values!")
+
     gadgets = filter_calls_jumps(gadgets)
+    print(f"[+] Filtered out gadgets that contain calls and jump instructions!")
+
     write_gadgets(files["full"], gadgets, "filtered gadgets", args.image_base, args.aslr, args.dll_name)
     print(f"[+] {len(gadgets)} gadgets written to {files['full']}")
 
     gadgets = process_high(files["high"], gadgets, args.image_base, args.aslr, args.dll_name, args.max_gadgets)
     print(f"[+] {len(gadgets)} high-quality gadgets written to {files['high']}")
+
 
 if __name__ == "__main__":
     main()
