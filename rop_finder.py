@@ -364,8 +364,7 @@ def main():
     if args.aslr and not args.image_base:
         sys.exit("[-] --image-base required with --aslr")
 
-    base = args.rop_output.rstrip(".txt")
-    files = {"full": f"{base}-full.txt", "high": f"{base}-high.txt"}
+    files = {"full": "rops-full.txt", "high": "rops-high.txt"}
     for f in files.values():
         open(f, "w").close()
 
@@ -379,6 +378,7 @@ def main():
         original_count  = len(gadgets)
         gadgets         = filter_badchars(gadgets, args.bad_bytes.replace("\\x", ""), args.aslr)
         print(f"[+] Filtered out gadgets whose addresses contain {args.bad_bytes}!")
+
         filtered_count  = len(gadgets)
         if filtered_count < 0.1 * original_count:
             print(f"[!] Warning: {filtered_count}/{original_count} gadgets remain after filtering")
