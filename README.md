@@ -10,7 +10,6 @@ Generates shellcode that dynamically locates and jumps to a unique ASCII string 
 egghunter.py
 ```
 
-
 ## ROP_finder.py
 ### Info
 Searches through a ROP++ output file and selects the most useful and pure gadgets. It filters out gadgets that contain bad bytes or opcodes that change the control flow (eg jmp/call). This script uses a combination of regex and stack simulation to classify gadgets and select the shortes and most elegant ones useful for common DEP bypasses.
@@ -23,10 +22,9 @@ rop_finder.py rop.txt
 ### Info
 Generates a hash for the input string that is used by custom_shellcode.py to dynamically locate a library.
 ### Usage
+```
 hash.py wsa2_32.dll
-
-## Encoder.py
-### Info
+```
 
 ## TCP_template.py
 ### Info
